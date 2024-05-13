@@ -2,7 +2,6 @@ import os
 import random
 import torch
 import torch.utils.data
-
 from utils.mel_processing import wav_to_spec, wav_to_mel
 from utils.task import load_vocab, load_wav_to_torch, load_filepaths_and_text
 from text import tokenizer
@@ -69,7 +68,7 @@ class TextAudioLoader(torch.utils.data.Dataset):
         return text_norm
 
     def get_audio(self, filename):
-        audio, sample_rate = load_wav_to_torch(filename)
+        audio, sample_rate = load_wav_to_torch(filename, self.sample_rate)
         assert sample_rate == self.sample_rate, f"{sample_rate} SR doesn't match target {self.sample_rate} SR"
         return audio
 
@@ -209,7 +208,7 @@ class TextAudioSpeakerLoader(torch.utils.data.Dataset):
         return text_norm
 
     def get_audio(self, filename):
-        audio, sample_rate = load_wav_to_torch(filename)
+        audio, sample_rate = load_wav_to_torch(filename, self.sample_rate)
         assert sample_rate == self.sample_rate, f"{sample_rate} SR doesn't match target {self.sample_rate} SR"
         return audio
 

@@ -26,17 +26,29 @@ def load_checkpoint(checkpoint_path, model, optimizer=None):
         state_dict = model.module.state_dict()
     else:
         state_dict = model.state_dict()
+    
     new_state_dict = {}
     for k, v in state_dict.items():
-        try:
-            new_state_dict[k] = saved_state_dict[k]
-        except:
-            logger.info("%s is not in the checkpoint" % k)
-            new_state_dict[k] = v
+        if 'enc_p.emb.weight' in k and v.size(0) != saved_state_dict[k].size(0):
+            logger.info("Resizing weight for {} from {} to {}".format(k, saved_state_dict[k].size(0), v.size(0)))
+            new_weight = torch.zeros_like(v)
+            # Copy over the weights from the checkpoint as much as fits
+            transfer_dim = min(saved_state_dict[k].size(0), v.size(0))
+            new_weight[:transfer_dim] = saved_state_dict[k][:transfer_dim]
+            new_state_dict[k] = new_weight
+        else:
+            try:
+                new_state_dict[k] = saved_state_dict[k]
+            except KeyError:
+                logger.info("%s is not in the checkpoint" % k)
+                new_state_dict[k] = v
+    
+    # Load the new state dict into the model
     if hasattr(model, "module"):
         model.module.load_state_dict(new_state_dict)
     else:
         model.load_state_dict(new_state_dict)
+
     logger.info("Loaded checkpoint '{}' (iteration {})".format(checkpoint_path, iteration))
     del checkpoint_dict
     torch.cuda.empty_cache()
@@ -157,7 +169,7 @@ def save_vocab(vocab, vocab_file: str):
             f.write(f"{token}\t{index}\n")
 
 
-def load_wav_to_torch(full_path):
+def load_wav_to_torch(full_path, sr):
     """Load wav file
     Args:
         full_path (str): Full path of the wav file
@@ -167,6 +179,10 @@ def load_wav_to_torch(full_path):
         sample_rate (int): Sampling rate of audio signal (Hz)
     """
     waveform, sample_rate = torchaudio.load(full_path)
+    if sample_rate!=sr:
+        waveform = torchaudio.functional.resample(waveform, sample_rate, sr)
+        sample_rate=sr
+    waveform = waveform.mean(dim=0).unsqueeze(0)
     return waveform, sample_rate
 
 

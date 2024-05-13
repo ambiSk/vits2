@@ -20,7 +20,7 @@ from data_utils import TextAudioSpeakerLoader, TextAudioSpeakerCollate, Distribu
 from losses import generator_loss, discriminator_loss, feature_loss, kl_loss, kl_loss_normal
 from utils.mel_processing import wav_to_mel, spec_to_mel, spectral_norm
 from utils.model import slice_segments, clip_grad_value_
-
+import sys
 
 torch.backends.cudnn.benchmark = True
 global_step = 0
@@ -59,7 +59,13 @@ def run(rank, n_gpus, hps):
     torch.cuda.set_device(rank)
 
     train_dataset = TextAudioSpeakerLoader(hps.data.training_files, hps.data)
-    train_sampler = DistributedBucketSampler(train_dataset, hps.train.batch_size, [32, 300, 400, 500, 600, 700, 800, 900, 1000], num_replicas=n_gpus, rank=rank, shuffle=True)
+    train_sampler = DistributedBucketSampler(
+        train_dataset, 
+        hps.train.batch_size,
+        [2000, 6000, 8000, 10000, 12000, 14000, 16000, 20000, 22000],
+        # [32, 300, 400, 500, 600, 700, 800, 900, 1000], 
+        num_replicas=n_gpus, rank=rank, shuffle=True
+    )
     collate_fn = TextAudioSpeakerCollate()
     train_loader = DataLoader(train_dataset, num_workers=8, shuffle=False, pin_memory=True, collate_fn=collate_fn, batch_sampler=train_sampler)
     if rank == 0:
@@ -74,13 +80,18 @@ def run(rank, n_gpus, hps):
     optim_d = torch.optim.AdamW(net_d.parameters(), hps.train.learning_rate, betas=hps.train.betas, eps=hps.train.eps)
     net_g = DDP(net_g, device_ids=[rank])
     net_d = DDP(net_d, device_ids=[rank])
-
+    if hasattr(hps.train, "load_pretrained"):
+        _ = task.load_checkpoint(hps.train.load_pretrained, net_g, None)
+        _ = task.load_checkpoint(hps.train.load_pretrained.replace('logs/G_', 'logs/D_'), net_d, None)
+        print("Model Loaded")
+        
     try:
         _, _, _, epoch_str = task.load_checkpoint(task.latest_checkpoint_path(hps.model_dir, "G_*.pth"), net_g, optim_g)
         _, _, _, epoch_str = task.load_checkpoint(task.latest_checkpoint_path(hps.model_dir, "D_*.pth"), net_d, optim_d)
         global_step = (epoch_str - 1) * len(train_loader)
         net_g.module.mas_noise_scale = max(hps.model.mas_noise_scale - global_step * hps.model.mas_noise_scale_decay, 0.0)
-    except:
+    except Exception as e:
+        print(e)
         epoch_str = 1
         global_step = 0
 
@@ -123,6 +134,7 @@ def train_and_evaluate(rank, epoch, hps, nets: List[torch.nn.parallel.Distribute
         speakers = speakers.cuda(rank, non_blocking=True)
 
         with autocast(enabled=hps.train.fp16_run):
+            # try:
             (
                 y_hat,
                 l_length,
@@ -134,6 +146,10 @@ def train_and_evaluate(rank, epoch, hps, nets: List[torch.nn.parallel.Distribute
                 (m_p_dur, logs_p_dur, z_q_dur, logs_q_dur),
                 (m_p_audio, logs_p_audio, m_q_audio, logs_q_audio),
             ) = net_g(x, x_lengths, spec, spec_lengths, speakers)
+            # except Exception as e:
+            #     print(spec_lengths)
+            #     print(e)
+            #     sys.exit()
 
             mel = spectral_norm(spec) if hps.data.use_mel else spec_to_mel(spec, hps.data.n_fft, hps.data.n_mels, hps.data.sample_rate, hps.data.f_min, hps.data.f_max)
             y_hat_mel = wav_to_mel(y_hat.squeeze(1), hps.data.n_fft, hps.data.n_mels, hps.data.sample_rate, hps.data.hop_length, hps.data.win_length, hps.data.f_min, hps.data.f_max)
@@ -157,6 +173,7 @@ def train_and_evaluate(rank, epoch, hps, nets: List[torch.nn.parallel.Distribute
             y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
             with autocast(enabled=False):
                 loss_dur = torch.sum(l_length.float())
+                # print(f"y_mel: {y_mel.size()}\n y_hat: {y_hat_mel.size()}")
                 loss_mel = F.l1_loss(y_mel, y_hat_mel) * hps.train.c_mel
                 loss_gen, losses_gen = generator_loss(y_d_hat_g)
 
